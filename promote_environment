@@ -1,0 +1,136 @@
+name: Promote environment to git tag
+
+# Manual, deliberate promotion of a chosen git tag into a dbt deployment
+# environment (UAT or Prod) using the "release tags on main" pattern.
+#
+# What it does, in order (this order matters — a tag must exist before an
+# environment can check it out):
+#   1. Ensure the git tag exists (create + push it from a ref if missing).
+#   2. Repoint the environment's "custom branch" to that tag (Admin API v3).
+#   3. Trigger that environment's deploy job (Admin API v2).
+#
+# Rollback = run this workflow again with an older tag.
+#
+# Prerequisites:
+#   - Repo secret  DBT_CLOUD_SERVICE_TOKEN  = a Job Admin service token for account 51798.
+#   - A deploy job must exist in the target environment (UAT has none yet — create one).
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target dbt environment"
+        required: true
+        type: choice
+        options:
+          - uat
+          - prod
+      tag:
+        description: "Git tag to deploy (e.g. uat-v1, prod-v1)"
+        required: true
+        type: string
+      git_ref:
+        description: "Ref to create the tag from if it does not exist yet (branch or SHA)"
+        required: false
+        default: "main"
+        type: string
+
+env:
+  DBT_HOST: tk626.us1.dbt.com
+  DBT_ACCOUNT_ID: "51798"
+  DBT_PROJECT_ID: "540375"
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    # Binds the run to the matching GitHub Environment (uat / prod): it reads that
+    # environment's secrets and enforces its protection rules. A required reviewer on
+    # the `prod` environment becomes an approval gate that pauses the run until someone
+    # approves it in the Actions UI.
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Map environment -> dbt environment ID
+        id: map
+        run: |
+          case "${{ inputs.environment }}" in
+            uat)  echo "env_id=458943" >> "$GITHUB_OUTPUT" ;;
+            prod) echo "env_id=458988" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Unknown environment '${{ inputs.environment }}'"; exit 1 ;;
+          esac
+
+      - name: Ensure git tag exists (create + push if missing)
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag '${TAG}' already exists on origin — reusing it (no move)."
+          else
+            echo "Tag '${TAG}' not found — creating at '${{ inputs.git_ref }}' and pushing."
+            git tag "${TAG}" "${{ inputs.git_ref }}"
+            git push origin "refs/tags/${TAG}"
+          fi
+
+      - name: Point environment at the tag (custom branch)
+        env:
+          DBT_TOKEN: ${{ secrets.DBT_CLOUD_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          ENV_ID="${{ steps.map.outputs.env_id }}"
+          BASE="https://${DBT_HOST}/api/v3/accounts/${DBT_ACCOUNT_ID}/projects/${DBT_PROJECT_ID}/environments/${ENV_ID}/"
+
+          # v3 update is a full-object write: GET the env, flip two fields, POST it back.
+          curl -sf -H "Authorization: Token ${DBT_TOKEN}" "${BASE}" -o env.json
+
+          jq --arg tag "${{ inputs.tag }}" \
+             '.data | .use_custom_branch = true | .custom_branch = $tag' \
+             env.json > env_update.json
+
+          curl -sf -X POST \
+            -H "Authorization: Token ${DBT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "${BASE}" -d @env_update.json -o env_after.json
+
+          echo "Environment ${ENV_ID} now on custom_branch: $(jq -r '.data.custom_branch' env_after.json)"
+
+      - name: Find the deploy job in that environment
+        id: job
+        env:
+          DBT_TOKEN: ${{ secrets.DBT_CLOUD_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          ENV_ID="${{ steps.map.outputs.env_id }}"
+          curl -sf -H "Authorization: Token ${DBT_TOKEN}" \
+            "https://${DBT_HOST}/api/v2/accounts/${DBT_ACCOUNT_ID}/jobs/?environment_id=${ENV_ID}" -o jobs.json
+          JOB_ID=$(jq -r '.data[0].id // empty' jobs.json)
+          if [ -z "${JOB_ID}" ]; then
+            echo "::error::No deploy job found in environment ${ENV_ID}. Create one first."
+            exit 1
+          fi
+          echo "job_id=${JOB_ID}" >> "$GITHUB_OUTPUT"
+          echo "Found deploy job ${JOB_ID} in environment ${ENV_ID}."
+
+      - name: Trigger the deploy job
+        env:
+          DBT_TOKEN: ${{ secrets.DBT_CLOUD_SERVICE_TOKEN }}
+        run: |
+          set -euo pipefail
+          JOB_ID="${{ steps.job.outputs.job_id }}"
+          RESP=$(curl -sf -X POST \
+            -H "Authorization: Token ${DBT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://${DBT_HOST}/api/v2/accounts/${DBT_ACCOUNT_ID}/jobs/${JOB_ID}/run/" \
+            -d "{\"cause\": \"Promote ${{ inputs.tag }} to ${{ inputs.environment }}\"}")
+          RUN_ID=$(echo "${RESP}" | jq -r '.data.id')
+          RUN_URL="https://${DBT_HOST}/deploy/${DBT_ACCOUNT_ID}/projects/${DBT_PROJECT_ID}/runs/${RUN_ID}"
+          echo "Triggered run ${RUN_ID}"
+          {
+            echo "### ✅ Promoted \`${{ inputs.tag }}\` → **${{ inputs.environment }}**"
+            echo "- Environment ID: ${{ steps.map.outputs.env_id }}"
+            echo "- Job ID: ${JOB_ID}"
+            echo "- Run: ${RUN_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
