@@ -1,4 +1,6 @@
 name: Promote environment to git tag
+permissions:
+  contents: write
 
 # Manual, deliberate promotion of a chosen git tag into a dbt deployment
 # environment (UAT or Prod) using the "release tags on main" pattern.
