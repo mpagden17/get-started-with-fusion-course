@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: dbt_mpagden_fusion
+    tables:
+      - name: customers
+      - name: orders
+      - name: products
+      - name: locations
+      - name: order_items
+      - name: supplies
