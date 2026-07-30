@@ -9,22 +9,17 @@ Flow:
   2. Diff it against the manifest committed at the previous release tag.
   3. For each changed node, walk child_map to find downstream exposures.
   4. Pull merged PR titles/descriptions between the two tags (GitHub API).
-  5. Send the digest to Claude with prompt_template.md and write the result.
-  6. Commit the result to release-notes/ and email it to the configured
-     recipients.
+  5. Send the digest to Claude with prompt_template.md and write the result
+     to release-notes/, committed back to the repo by the Action.
 """
 
 import json
 import os
-import smtplib
 import subprocess
 import sys
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 
 import requests
-from markdown import markdown as markdown_to_html
 
 DBT_HOST_URL = os.environ["DBT_HOST_URL"].rstrip("/")
 DBT_API_KEY = os.environ["DBT_API_KEY"]
@@ -38,13 +33,6 @@ RELEASE_TAG = os.environ.get("RELEASE_TAG", "untagged")
 PREVIOUS_TAG = os.environ.get("PREVIOUS_TAG") or None
 
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5")
-
-EMAIL_SMTP_HOST = os.environ["EMAIL_SMTP_HOST"]
-EMAIL_SMTP_PORT = int(os.environ.get("EMAIL_SMTP_PORT", "587"))
-EMAIL_SMTP_USERNAME = os.environ["EMAIL_SMTP_USERNAME"]
-EMAIL_SMTP_PASSWORD = os.environ["EMAIL_SMTP_PASSWORD"]
-EMAIL_FROM = os.environ["EMAIL_FROM"]
-EMAIL_TO = [addr.strip() for addr in os.environ["EMAIL_TO"].split(",") if addr.strip()]
 
 MANIFEST_PATH = Path("dbt_artifacts/manifest_latest.json")
 OUTPUT_DIR = Path("release-notes")
@@ -222,29 +210,6 @@ def write_output(markdown: str) -> Path:
     return out_path
 
 
-def send_email(markdown: str, subject: str) -> None:
-    html_body = markdown_to_html(markdown, extensions=["extra"])
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(EMAIL_TO)
-    msg.attach(MIMEText(markdown, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
-    with smtplib.SMTP(EMAIL_SMTP_HOST, EMAIL_SMTP_PORT) as server:
-        server.starttls()
-        server.login(EMAIL_SMTP_USERNAME, EMAIL_SMTP_PASSWORD)
-        server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
-
-
-def deliver(markdown: str) -> Path:
-    """Commit the notes to the repo and email them to the configured recipients."""
-    out_path = write_output(markdown)
-    send_email(markdown, subject=f"Data changes — {RELEASE_TAG}")
-    return out_path
-
-
 def main() -> None:
     previous_manifest = load_previous_manifest()
 
@@ -258,7 +223,7 @@ def main() -> None:
     MANIFEST_PATH.write_text(json.dumps(current_manifest))
 
     if previous_manifest is None:
-        deliver(
+        write_output(
             f"# What Changed — {RELEASE_TAG}\n\n"
             "_This is the first release tracked by this automation — "
             "there's no prior baseline to compare against. Future releases "
@@ -270,7 +235,7 @@ def main() -> None:
     pull_requests = get_merged_prs(PREVIOUS_TAG, RELEASE_TAG)
 
     if not (changes["added"] or changes["removed"] or changes["modified"]):
-        deliver(
+        write_output(
             f"# What Changed — {RELEASE_TAG}\n\n"
             "_No data-affecting changes since the last release._\n"
         )
@@ -287,8 +252,8 @@ def main() -> None:
     if not current_manifest.get("exposures"):
         markdown += NO_EXPOSURES_NOTE
 
-    out_path = deliver(markdown)
-    print(f"Wrote {out_path} and emailed {len(EMAIL_TO)} recipient(s)", file=sys.stderr)
+    out_path = write_output(markdown)
+    print(f"Wrote {out_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
