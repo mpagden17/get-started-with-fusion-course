@@ -251,6 +251,9 @@ def main() -> None:
         "pull_requests": pull_requests,
     }
 
+    print("DEBUG digest (test-only, remove before shipping):", file=sys.stderr)
+    print(json.dumps(digest, indent=2), file=sys.stderr)
+
     markdown = call_claude(digest)
     if not current_manifest.get("exposures"):
         markdown += NO_EXPOSURES_NOTE
