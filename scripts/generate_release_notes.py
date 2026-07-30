@@ -51,9 +51,12 @@ DBT_HEADERS = {"Authorization": f"Bearer {DBT_API_KEY}"}
 
 
 def get_latest_successful_run_id() -> int:
-    url = f"{DBT_HOST_URL}/api/v2/accounts/{DBT_ACCOUNT_ID}/jobs/{DBT_PROD_JOB_ID}/runs/"
+    url = f"{DBT_HOST_URL}/api/v2/accounts/{DBT_ACCOUNT_ID}/runs/"
     resp = requests.get(
-        url, headers=DBT_HEADERS, params={"status": 10, "order_by": "-id", "limit": 1}, timeout=30
+        url,
+        headers=DBT_HEADERS,
+        params={"job_definition_id": DBT_PROD_JOB_ID, "status": 10, "order_by": "-id", "limit": 1},
+        timeout=30,
     )
     resp.raise_for_status()
     runs = resp.json()["data"]
