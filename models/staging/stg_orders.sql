@@ -23,6 +23,7 @@ renamed as (
         {{ cents_to_dollars('subtotal') }} as subtotal,
         {{ cents_to_dollars('tax_paid') }} as tax_paid,
         {{ cents_to_dollars('order_total') }} as order_total,
+        (subtotal + tax_paid) as gross_revenue,
 
         ---------- timestamps
         cast(ordered_at as date) as order_date
