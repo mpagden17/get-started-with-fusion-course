@@ -1,12 +1,20 @@
 name: Generate non-technical release notes
 
+# In the client's real pipeline, this becomes an additional job appended to
+# `_dbt-cd.yml` after `dbt_cloud_deploy`, scoped to the `prd` environment,
+# consuming `needs.dbt_cloud_deploy.outputs.run_id` directly — no manual
+# input needed there. This test repo doesn't have that reusable-workflow
+# structure, so a manual `run_id` input stands in for it here.
 on:
-  push:
-    tags:
-      - "v*"          # adjust to match this repo's actual release-tag convention
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "dbt Cloud run ID for the production run to generate notes for"
+        required: true
+        type: string
 
 permissions:
-  contents: write     # needed to commit the generated notes + manifest snapshot back to the repo
+  contents: read   # no longer commits anything back to the repo
 
 jobs:
   release-notes:
@@ -14,8 +22,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   # full history so we can diff against the previous tag
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -25,31 +31,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Determine previous release tag
-        id: prev_tag
-        run: |
-          CURRENT_TAG="${GITHUB_REF_NAME}"
-          PREV_TAG=$(git tag --sort=-creatordate | grep -v "^${CURRENT_TAG}$" | head -n 1 || true)
-          echo "current_tag=${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
-          echo "previous_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
-
       - name: Generate release notes
         env:
           DBT_API_KEY: ${{ secrets.DBT_API_KEY }}
           DBT_ACCOUNT_ID: ${{ secrets.DBT_ACCOUNT_ID }}
           DBT_HOST_URL: ${{ secrets.DBT_HOST_URL }}
           DBT_PROD_JOB_ID: ${{ secrets.DBT_PROD_JOB_ID }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ steps.prev_tag.outputs.current_tag }}
-          PREVIOUS_TAG: ${{ steps.prev_tag.outputs.previous_tag }}
+          CURRENT_RUN_ID: ${{ inputs.run_id }}
         run: python scripts/generate_release_notes.py
 
-      - name: Commit generated notes
+      - name: Convert release notes to PDF
         run: |
-          git config user.name "dbt-release-notes-bot"
-          git config user.email "actions@users.noreply.github.com"
-          git add release-notes/ dbt_artifacts/
-          git diff --cached --quiet || git commit -m "docs: release notes for ${GITHUB_REF_NAME}"
-          git push origin HEAD:main
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pandoc wkhtmltopdf
+          for f in release-notes/*.md; do
+            pandoc "$f" -o "${f%.md}.pdf" --pdf-engine=wkhtmltopdf
+          done
+
+      - name: Upload release notes (Markdown + PDF)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
+          if-no-files-found: error
