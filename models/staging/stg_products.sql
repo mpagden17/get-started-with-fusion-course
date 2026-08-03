@@ -18,6 +18,7 @@ renamed as (
         name as product_name,
         type as product_type,
         description as product_description,
+        price as raw_price,
 
 
         ---------- numerics
