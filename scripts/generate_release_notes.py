@@ -45,7 +45,7 @@ from pathlib import Path
 import requests
 
 DBT_HOST_URL = os.environ["DBT_HOST_URL"].rstrip("/")
-DBT_API_TOKEN = os.environ["DBT_API_TOKEN"]
+DBT_API_TOKEN = os.environ["DBT_API_KEY"]
 DBT_ACCOUNT_ID = os.environ["DBT_ACCOUNT_ID"]
 DBT_JOB_IDS = [j.strip() for j in os.environ["DBT_JOB_IDS"].split(",") if j.strip()]
 
