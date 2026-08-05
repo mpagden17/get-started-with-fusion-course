@@ -1,36 +1,41 @@
 #!/usr/bin/env python3
 """
 Generates a plain-language release-notes markdown file from a dbt platform
-manifest diff and the PRs merged since the previous production release.
+manifest diff and the PRs merged between two commits.
 
-Adapted to fit the client's actual deploy pipeline (EDS-SNOWFLAKE-ACTIONS):
-  - Their `_dbt-cd.yml` triggers on push to `main` and on the `uat`/`prd`
-    tags, which are mutable (force-moved onto a versioned release tag by
-    `_move-environment.yml`). There's no growing series of immutable release
-    tags to diff against, so "current" and "previous" production releases
-    are identified by run/commit, not by git tag ordering.
-  - Their CD pipeline requests `contents: read` only and never commits
-    anything back to the repo, so there's no committed manifest snapshot to
-    diff against either. Both manifests are always fetched fresh from the
-    Admin API.
+Built around two explicit git SHAs — TARGET_SHA and BASELINE_SHA — rather
+than "the latest run" or git tag ordering, to serve two real use cases:
+
+  1. Environment promotion (the primary use case): when moving `uat` or
+     `prd` onto a versioned release tag, diff that target commit against
+     whatever commit is *currently* live in production. This answers "what
+     will change from what's live today" for a uat move, and doubles as the
+     official release notes when the same diff is run for the prd move onto
+     that same commit later — no separate logic needed for either case.
+  2. Ad hoc historical diffing: pass any two arbitrary commits (e.g. a
+     January 1st release and today) to get a full summary of everything
+     that changed between them — a "what did we ship this year" report.
+
+Both cases reduce to the same operation: given two commit SHAs, find the
+most recent successful dbt Cloud run that built each one (searched across
+whichever job IDs are provided, since either commit may have first been
+proven out via a UAT run, a PROD run, or another job entirely), diff their
+manifests, and pull PR context between the two SHAs.
 
 Flow:
-  1. Fetch the manifest for CURRENT_RUN_ID (the run that `dbt_cloud_deploy`
-     just completed — pinned explicitly so this never re-queries "latest"
-     and risks a race with a run that started after it).
-  2. Find the most recent other successful run of the same job and fetch
-     its manifest as the "previous release" baseline.
-  3. Diff the two manifests for added/removed/modified models, seeds, and
-     snapshots.
-  4. For each changed node, walk child_map to find downstream exposures.
-  5. Pull merged PR titles/descriptions between the two runs' git_sha
-     values (GitHub compare API) for the "why".
-  6. Render plain-language markdown with format_digest() — no LLM call.
+  1. Resolve TARGET_SHA and BASELINE_SHA to their respective most recent
+     successful dbt Cloud runs (search by git_sha, not by run id).
+  2. Diff the two manifests for added / removed / modified models, seeds,
+     and snapshots.
+  3. For each changed node, walk child_map to find downstream exposures.
+  4. Pull merged PR titles/descriptions between the two SHAs (GitHub API).
+  5. Render plain-language markdown with format_digest() — no LLM call, no
+     external AI vendor account required.
 
-Delivery (where this markdown actually ends up — a GitHub Release, a repo
-file, somewhere else entirely) hasn't been decided yet, so write_output()
-is a placeholder that writes to a local `release-notes/` folder pending
-that decision.
+Delivery (where this markdown/PDF actually ends up for non-technical
+readers) hasn't been decided yet, so write_output() writes to a local
+`release-notes/` folder and the calling workflow uploads it as a
+downloadable Action artifact (Markdown + PDF) pending that decision.
 """
 
 import os
@@ -40,10 +45,12 @@ from pathlib import Path
 import requests
 
 DBT_HOST_URL = os.environ["DBT_HOST_URL"].rstrip("/")
-DBT_API_KEY = os.environ["DBT_API_KEY"]
+DBT_API_TOKEN = os.environ["DBT_API_TOKEN"]
 DBT_ACCOUNT_ID = os.environ["DBT_ACCOUNT_ID"]
-DBT_PROD_JOB_ID = os.environ["DBT_PROD_JOB_ID"]
-CURRENT_RUN_ID = os.environ["CURRENT_RUN_ID"]  # run_id output of the dbt_cloud_deploy job that just ran
+DBT_JOB_IDS = [j.strip() for j in os.environ["DBT_JOB_IDS"].split(",") if j.strip()]
+
+TARGET_SHA = os.environ["TARGET_SHA"]
+BASELINE_SHA = os.environ.get("BASELINE_SHA") or None  # optional: omit for a first-release doc
 
 GITHUB_REPOSITORY = os.environ.get("GITHUB_REPOSITORY")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -59,30 +66,36 @@ NO_EXPOSURES_NOTE = (
     "the dashboard or report they impact._\n"
 )
 
-DBT_HEADERS = {"Authorization": f"Bearer {DBT_API_KEY}"}
+DBT_HEADERS = {"Authorization": f"Bearer {DBT_API_TOKEN}"}
+
+RUN_SEARCH_PAGE_SIZE = 100
+RUN_SEARCH_MAX_PAGES = 10  # up to ~1,000 runs per job — generous enough for a year+ of history
 
 
-def get_run(run_id) -> dict:
-    url = f"{DBT_HOST_URL}/api/v2/accounts/{DBT_ACCOUNT_ID}/runs/{run_id}/"
-    resp = requests.get(url, headers=DBT_HEADERS, timeout=30)
-    resp.raise_for_status()
-    return resp.json()["data"]
-
-
-def get_previous_successful_run(exclude_run_id) -> dict | None:
-    """Most recent successful run of DBT_PROD_JOB_ID other than exclude_run_id."""
-    url = f"{DBT_HOST_URL}/api/v2/accounts/{DBT_ACCOUNT_ID}/runs/"
-    resp = requests.get(
-        url,
-        headers=DBT_HEADERS,
-        params={"job_definition_id": DBT_PROD_JOB_ID, "status": 10, "order_by": "-id", "limit": 5},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    for run in resp.json()["data"]:
-        if str(run["id"]) != str(exclude_run_id):
-            return run
-    return None
+def find_run_by_sha(sha: str, job_ids: list[str]) -> dict:
+    """Most recent successful run whose git_sha matches `sha`, searched across job_ids."""
+    for job_id in job_ids:
+        for page in range(RUN_SEARCH_MAX_PAGES):
+            resp = requests.get(
+                f"{DBT_HOST_URL}/api/v2/accounts/{DBT_ACCOUNT_ID}/runs/",
+                headers=DBT_HEADERS,
+                params={
+                    "job_definition_id": job_id,
+                    "status": 10,
+                    "order_by": "-id",
+                    "limit": RUN_SEARCH_PAGE_SIZE,
+                    "offset": page * RUN_SEARCH_PAGE_SIZE,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            runs = resp.json()["data"]
+            for run in runs:
+                if run.get("git_sha") == sha:
+                    return run
+            if len(runs) < RUN_SEARCH_PAGE_SIZE:
+                break
+    raise RuntimeError(f"No successful run found for commit {sha} across job(s) {job_ids}")
 
 
 def download_manifest(run_id) -> dict:
@@ -170,7 +183,7 @@ def diff_manifests(previous: dict | None, current: dict) -> dict:
 
 
 def get_merged_prs(previous_sha: str | None, current_sha: str | None) -> list[dict]:
-    """Titles/descriptions of PRs associated with commits between two production git_sha values."""
+    """Titles/descriptions of PRs associated with commits between two git_sha values."""
     if not (GITHUB_REPOSITORY and GITHUB_TOKEN and previous_sha and current_sha):
         return []
 
@@ -226,9 +239,9 @@ def format_digest(digest: dict) -> str:
         else:
             no_exposure.append((item, change_type))
 
-    lines = [f"# What Changed — {digest['release_label']}", ""]
-    if digest.get("previous_release_label"):
-        lines.append(f"_Comparing against the previous production release, `{digest['previous_release_label']}`._")
+    lines = [f"# What Changed — {digest['target_label']}", ""]
+    if digest.get("baseline_label"):
+        lines.append(f"_Comparing against baseline `{digest['baseline_label']}`._")
         lines.append("")
 
     if by_exposure:
@@ -267,7 +280,7 @@ def format_digest(digest: dict) -> str:
 
 
 def write_output(label: str, markdown: str) -> Path:
-    """Placeholder delivery: writes locally pending a decision on where this actually needs to land."""
+    """Placeholder delivery: writes locally; the calling workflow uploads this as an Action artifact."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     out_path = OUTPUT_DIR / f"{label}.md"
     out_path.write_text(markdown)
@@ -275,51 +288,48 @@ def write_output(label: str, markdown: str) -> Path:
 
 
 def main() -> None:
-    current_run = get_run(CURRENT_RUN_ID)
-    current_manifest = download_manifest(current_run["id"])
-    current_sha = current_run.get("git_sha")
-    current_label = current_sha[:7] if current_sha else f"run-{current_run['id']}"
+    target_run = find_run_by_sha(TARGET_SHA, DBT_JOB_IDS)
+    target_manifest = download_manifest(target_run["id"])
+    target_label = TARGET_SHA[:7]
 
-    previous_run = get_previous_successful_run(exclude_run_id=current_run["id"])
-
-    if previous_run is None:
+    if not BASELINE_SHA:
         write_output(
-            current_label,
-            f"# What Changed — {current_label}\n\n"
-            "_This is the first tracked production release — there's no "
-            "prior run to compare against. Future releases will include a "
-            "full summary of what changed._\n",
+            target_label,
+            f"# What Changed — {target_label}\n\n"
+            "_This is the first tracked release — there's no baseline to "
+            "compare against. Future releases will include a full summary "
+            "of what changed._\n",
         )
         return
 
-    previous_manifest = download_manifest(previous_run["id"])
-    previous_sha = previous_run.get("git_sha")
-    previous_label = previous_sha[:7] if previous_sha else f"run-{previous_run['id']}"
+    baseline_run = find_run_by_sha(BASELINE_SHA, DBT_JOB_IDS)
+    baseline_manifest = download_manifest(baseline_run["id"])
+    baseline_label = BASELINE_SHA[:7]
 
-    changes = diff_manifests(previous_manifest, current_manifest)
+    changes = diff_manifests(baseline_manifest, target_manifest)
 
     if not (changes["added"] or changes["removed"] or changes["modified"]):
         write_output(
-            current_label,
-            f"# What Changed — {current_label}\n\n_No data-affecting changes since the last release._\n",
+            target_label,
+            f"# What Changed — {target_label}\n\n_No data-affecting changes since `{baseline_label}`._\n",
         )
         return
 
-    pull_requests = get_merged_prs(previous_sha, current_sha)
+    pull_requests = get_merged_prs(BASELINE_SHA, TARGET_SHA)
 
     digest = {
-        "release_label": current_label,
-        "previous_release_label": previous_label,
+        "target_label": target_label,
+        "baseline_label": baseline_label,
         "changes": changes,
         "pull_requests": pull_requests,
     }
 
     markdown = format_digest(digest)
-    if not current_manifest.get("exposures"):
+    if not target_manifest.get("exposures"):
         markdown += NO_EXPOSURES_NOTE
 
-    out_path = write_output(current_label, markdown)
-    print(f"Wrote {out_path} (placeholder location pending delivery decision)", file=sys.stderr)
+    out_path = write_output(target_label, markdown)
+    print(f"Wrote {out_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
