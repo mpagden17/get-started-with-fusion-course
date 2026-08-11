@@ -1,0 +1,64 @@
+name: Generate non-technical release notes
+
+# In the client's real pipeline, TARGET_SHA and BASELINE_SHA are resolved
+# automatically inside `_move-environment.yml` (target = the version being
+# moved to, baseline = whatever's currently in prod, captured before the
+# move). This test repo doesn't have that reusable-workflow structure, so
+# manual SHA inputs stand in for it here — this also directly exercises the
+# ad hoc "diff any two commits" use case.
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Commit SHA to generate notes for (the newer/target point)"
+        required: true
+        type: string
+      baseline_sha:
+        description: "Commit SHA to diff against (leave blank for a first-release doc)"
+        required: false
+        type: string
+
+permissions:
+  contents: read   # never commits anything back to the repo
+
+jobs:
+  release-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Generate release notes
+        env:
+          DBT_API_KEY: ${{ secrets.DBT_API_KEY }}
+          DBT_ACCOUNT_ID: ${{ secrets.DBT_ACCOUNT_ID }}
+          DBT_HOST_URL: ${{ secrets.DBT_HOST_URL }}
+          DBT_JOB_IDS: ${{ secrets.DBT_JOB_IDS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          BASELINE_SHA: ${{ inputs.baseline_sha }}
+        run: python scripts/generate_release_notes.py
+
+      - name: Convert release notes to PDF
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pandoc wkhtmltopdf
+          for f in release-notes/*.md; do
+            pandoc "$f" -o "${f%.md}.pdf" --pdf-engine=wkhtmltopdf
+          done
+
+      - name: Upload release notes (Markdown + PDF)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
+          if-no-files-found: error
