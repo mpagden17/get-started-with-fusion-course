@@ -11,8 +11,6 @@ exposures:
     depends_on:
       - ref('orders')
       - ref('customers')
-      - metric('count_orders')
-
     owner:
       name: Molly P
       email: molly.pagden@dbtlabs.com
