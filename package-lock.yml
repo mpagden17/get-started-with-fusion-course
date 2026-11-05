@@ -1,5 +1,15 @@
 packages:
+- package: dbt-labs/audit_helper
+  name: audit_helper
+  version: 0.13.0
+- package: dbt-labs/codegen
+  name: codegen
+  version: 0.14.0
 - package: dbt-labs/dbt_utils
   name: dbt_utils
-  version: 1.3.3
-sha1_hash: 324340f91fa6209d83effd377f2cbe828d3bd667
+  version: 1.4.1
+- private: mpagden17/jaffle-shop-snowflake
+  name: molly_snowflake_sandbox
+  revision: 337a8e4050d75eb6b83eba3e1cd2d5773da4adc3
+  provider: github
+sha1_hash: 9e3269dbec3d100c77d05dd1199d006ec60a3e62
