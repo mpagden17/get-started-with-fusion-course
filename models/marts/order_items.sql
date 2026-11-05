@@ -51,7 +51,8 @@ joined as (
         products.is_drink_item,
         products.product_type,
 
-        order_supplies_summary.supply_cost
+        order_supplies_summary.supply_cost,
+        'test column' as testing
 
     from order_items
 
