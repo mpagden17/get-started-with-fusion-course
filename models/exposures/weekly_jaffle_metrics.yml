@@ -9,7 +9,7 @@ exposures:
       Did someone say "exponential growth"?
 
     depends_on:
-      - ref('fct_orders')
+      - ref('orders')
       - ref('customers')
       - metric('count_orders')
 
