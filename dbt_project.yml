@@ -1,5 +1,9 @@
 name: jaffle_shop_17
 
+flags:
+  ai_provider: wizard
+  require_generic_test_arguments_property: true
+
 profile: jaffle_shop_17
 
 seed-paths: ["seeds"]
@@ -21,5 +25,4 @@ models:
       +materialized: view
     marts:
       +materialized: table
-flags:
-  require_generic_test_arguments_property: true
+  
