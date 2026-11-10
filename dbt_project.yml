@@ -1,8 +1,11 @@
 name: jaffle_shop_17
 
 flags:
-  ai_provider: wizard
-  require_generic_test_arguments_property: true
+  ai_provider:
+    - claude
+    - codex
+    - cursor
+    - wizard
 
 profile: jaffle_shop_17
 
