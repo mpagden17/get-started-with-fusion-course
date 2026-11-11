@@ -1,3 +1,5 @@
+{{ config(tags=['crane']) }}
+
 with
 
 source as (
