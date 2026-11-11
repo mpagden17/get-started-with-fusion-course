@@ -8,7 +8,7 @@ metadata:
   dbt.version: 87a42f82972885ba03e49cdaa1cf816a52c1764b
   dbt.source_path: skills/naming-conventions
   dbt.source_hash: sha256:d85886349aef45dfe5199c5332fe19eaf8e94dd9748630565fbb190919900673
-  dbt.installed_at: 2026-11-06T19:55:47.646111833+00:00
+  dbt.installed_at: 2026-11-10T23:08:58.232668616+00:00
 ---
 
 # Model and file naming conventions

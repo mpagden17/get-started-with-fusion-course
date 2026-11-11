@@ -8,7 +8,7 @@ metadata:
   dbt.version: 87a42f82972885ba03e49cdaa1cf816a52c1764b
   dbt.source_path: skills/testing-best-practices
   dbt.source_hash: sha256:6b61591703b0cd6f7f5b520edf0b3dccaf52f262408256db12b459cbf87cc81e
-  dbt.installed_at: 2026-11-06T19:55:47.645355166+00:00
+  dbt.installed_at: 2026-11-10T23:08:58.231652036+00:00
 ---
 
 # Every model needs real, non-cosmetic test coverage

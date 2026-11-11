@@ -8,7 +8,7 @@ metadata:
   dbt.version: 87a42f82972885ba03e49cdaa1cf816a52c1764b
   dbt.source_path: skills/model-yml-requirements
   dbt.source_hash: sha256:ce952b2513ef8cb7a3c5639a41d37f16ecb0d3169310cd62acfd4a9181e8fe66
-  dbt.installed_at: 2026-11-06T19:55:47.644174900+00:00
+  dbt.installed_at: 2026-11-10T23:08:58.230491314+00:00
 ---
 
 # Every model and source needs a companion .yml file

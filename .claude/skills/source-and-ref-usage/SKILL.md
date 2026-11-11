@@ -8,7 +8,7 @@ metadata:
   dbt.version: 87a42f82972885ba03e49cdaa1cf816a52c1764b
   dbt.source_path: skills/source-and-ref-usage
   dbt.source_hash: sha256:4494b058b059090e70a04e2c904df571bd4c739fa5d651a8110a2e970f7c5b7d
-  dbt.installed_at: 2026-11-06T19:55:47.645114321+00:00
+  dbt.installed_at: 2026-11-10T23:08:58.231342241+00:00
 ---
 
 # Always use source() and ref(), never hardcoded table names

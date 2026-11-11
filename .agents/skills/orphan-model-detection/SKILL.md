@@ -8,7 +8,7 @@ metadata:
   dbt.version: 87a42f82972885ba03e49cdaa1cf816a52c1764b
   dbt.source_path: skills/orphan-model-detection
   dbt.source_hash: sha256:a59a77bcd964b7311f7de1d9706e9cb834d42fda16c5207cea2ff946cc0c33f4
-  dbt.installed_at: 2026-11-06T19:55:47.646548273+00:00
+  dbt.installed_at: 2026-11-10T23:08:58.232983351+00:00
 ---
 
 # Find orphan models — but know which layer is allowed to be one
