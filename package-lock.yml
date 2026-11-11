@@ -10,6 +10,6 @@ packages:
   version: 1.4.1
 - private: mpagden17/jaffle-shop-snowflake
   name: molly_snowflake_sandbox
-  revision: 337a8e4050d75eb6b83eba3e1cd2d5773da4adc3
+  revision: 87a42f82972885ba03e49cdaa1cf816a52c1764b
   provider: github
-sha1_hash: 9e3269dbec3d100c77d05dd1199d006ec60a3e62
+sha1_hash: 2db945e2aa795fc6274f2ecd540860f2aaa35172
